@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Vũ Trụ Trong Tầm Tay - Ultimate Version</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000000; font-family: 'Segoe UI', sans-serif; }
+        
+        /* --- GIAO DIỆN NGƯỜI DÙNG (UI) --- */
+        #ui-container {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 10;
+            width: 300px;
+            color: white;
+            pointer-events: none; /* Để chuột có thể xuyên qua bấm vào 3D bên dưới nếu cần */
+        }
+
+        /* Các thành phần UI sẽ tương tác được */
+        .interactive-ui {
+            pointer-events: auto; 
+        }
+
+        /* Hộp chứa Video & Khung xương */
+        #video-box {
+            position: relative;
+            width: 100%;
+            height: 200px;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid #444;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            margin-bottom: 15px;
+            transform: scaleX(-1); /* Lật gương */
+        }
+
+        #video-feed {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        #output-canvas {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+        }
+
+        /* Các Hộp điều khiển (Group Box) */
+        .control-box {
+            background: rgba(20, 20, 20, 0.85);
+            backdrop-filter: blur(5px);
+            padding: 15px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            margin-bottom: 10px;
+        }
+
+        .box-title {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #88ffaa;
+            margin-bottom: 10px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            padding-bottom: 5px;
+            font-weight: bold;
+        }
+
+        .control-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+
+        input[type="range"] {
+            width: 100px;
+            cursor: pointer;
+        }
+        
+        input[type="color"] {
+            border: none; width: 30px; height: 20px; background: none; cursor: pointer;
+        }
+
+        #status-text {
+            text-align: center; font-size: 12px; color: #aaa; margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-container">
+        <div id="video-box" class="interactive-ui">
+            <video id="video-feed" autoplay playsinline></video>
+            <canvas id="output-canvas"></canvas> </div>
+        <div class="control-box interactive-ui" style="text-align: center; padding: 5px;">
+            <div id="status-text">Đang khởi động AI...</div>
+        </div>
+
+        <div class="control-box interactive-ui">
+            <div class="box-title">Giao Diện Màu</div>
+            <div class="control-row">
+                <label>Hành Tinh</label>
+                <input type="color" id="planetColor" value="#88ffaa">
+            </div>
+            <div class="control-row">
+                <label>Vành Đai</label>
+                <input type="color" id="ringColor" value="#cc99ff">
+            </div>
+        </div>
+
+        <div class="control-box interactive-ui">
+            <div class="box-title">Vật Lý & Không Gian</div>
+            <div class="control-row">
+                <label title="Tốc độ tự xoay của hành tinh">Tốc độ Hành Tinh</label>
+                <input type="range" id="planetSpeed" min="0" max="100" value="20">
+            </div>
+            <div class="control-row">
+                <label title="Tốc độ tự xoay của vành đai">Tốc độ Vành Đai</label>
+                <input type="range" id="ringSpeed" min="0" max="100" value="10">
+            </div>
+            <div class="control-row">
+                <label title="Độ lấp lánh của sao nền">Sao Nhấp Nháy</label>
+                <input type="range" id="starTwinkle" min="0" max="100" value="50">
+            </div>
+            <div class="control-row">
+                <label title="Độ trễ khi tay di chuyển (Thấp = Mượt/Trễ)">Độ Mượt (Inertia)</label>
+                <input type="range" id="smoothness" min="1" max="20" value="5">
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3/drawing_utils.js" crossorigin="anonymous"></script>
+
+    <script>
+        // --- 1. CẤU HÌNH & BIẾN TOÀN CỤC ---
+        const UI = {
+            planetSpeed: document.getElementById('planetSpeed'),
+            ringSpeed: document.getElementById('ringSpeed'),
+            starTwinkle: document.getElementById('starTwinkle'),
+            smoothness: document.getElementById('smoothness')
+        };
+
+        let scene, camera, renderer, controls;
+        let planet, ring, stars;
+        
+        // Biến vật lý chuyển động
+        let targetScale = 1.0; 
+        let currentScale = 1.0; 
+        
+        let targetRotX = 0, targetRotY = 0;
+        let currentRotX = 0, currentRotY = 0;
+
+        // Cấu hình biên độ
+        const MIN_SCALE = 0.15; // Thu nhỏ (Nắm tay)
+        const MAX_SCALE = 2.2;  // Phóng to (Mở tay)
+        
+        // --- 2. XỬ LÝ MEDIA PIPE (AI) ---
+        const videoElement = document.getElementById('video-feed');
+        const canvasElement = document.getElementById('output-canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const statusText = document.getElementById('status-text');
+
+        function onResults(results) {
+            // -- A. Vẽ Khung Xương (Debug Sticks) --
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                statusText.innerText = "Đang kết nối tay...";
+                statusText.style.color = "#88ffaa";
+                
+                const landmarks = results.multiHandLandmarks[0];
+
+                // Vẽ các đường nối và khớp
+                drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 2});
+                drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 1, radius: 3});
+
+                // -- B. Logic Bung/Thu (Scale) --
+                // Tính khoảng cách giữa đầu ngón cái (4) và đầu ngón trỏ (8)
+                const thumbTip = landmarks[4];
+                const indexTip = landmarks[8];
+                const pinchDist = Math.sqrt(Math.pow(thumbTip.x - indexTip.x, 2) + Math.pow(thumbTip.y - indexTip.y, 2));
+
+                // Chuẩn hóa khoảng cách (0.05 là chụm sát, 0.4 là mở rộng)
+                let scaleRatio = (pinchDist - 0.05) / (0.4 - 0.05);
+                scaleRatio = Math.max(0, Math.min(1, scaleRatio)); // Kẹp giữa 0 và 1
+                
+                targetScale = MIN_SCALE + (MAX_SCALE - MIN_SCALE) * scaleRatio;
+
+                // -- C. Logic Xoay (Rotation) --
+                // Dùng cổ tay (0) để điều hướng
+                const wrist = landmarks[0];
+                // Xoay rất nhẹ: Giảm hệ số nhân xuống (Math.PI * 0.8)
+                targetRotY = (wrist.x - 0.5) * Math.PI * 0.8; // Trái/Phải
+                targetRotX = (wrist.y - 0.5) * Math.PI * 0.8; // Lên/Xuống
+
+            } else {
+                statusText.innerText = "Đang tìm tay...";
+                statusText.style.color = "#aaa";
+                // Không có tay thì giữ nguyên vị trí hoặc về mặc định từ từ
+                targetScale = 1.0;
+                targetRotX = 0; targetRotY = 0;
+            }
+            canvasCtx.restore();
+        }
+        
+        // --- 3. THREE.JS: KHỞI TẠO & ANIMATION ---
+        function initThreeJS() {
+            scene = new THREE.Scene();
+            // Sương mù đen để tạo chiều sâu vô tận
+            scene.fog = new THREE.FogExp2(0x000000, 0.015);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 5;
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // Controls chuột (để nhìn xung quanh khi cần)
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.enableZoom = true;
+
+            // --- TẠO VẬT THỂ ---
+            
+            // 1. Hành tinh (Hạt)
+            const planetGeo = new THREE.BufferGeometry();
+            const planetPos = [];
+            for (let i = 0; i < 12000; i++) {
+                const r = 1.5 * Math.pow(Math.random(), 1/3); 
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.acos(2 * Math.random() - 1);
+                planetPos.push(r * Math.sin(phi) * Math.cos(theta), r * Math.sin(phi) * Math.sin(theta), r * Math.cos(phi));
+            }
+            planetGeo.setAttribute('position', new THREE.Float32BufferAttribute(planetPos, 3));
+            planet = new THREE.Points(planetGeo, new THREE.PointsMaterial({ size: 0.02, color: 0x88ffaa, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending }));
+            scene.add(planet);
+
+            // 2. Vành đai (Hạt mịn)
+            const ringGeo = new THREE.BufferGeometry();
+            const ringPos = [];
+            for (let i = 0; i < 4000; i++) {
+                const r = 2.0 + Math.random() * 1.5; 
+                const t = Math.random() * Math.PI * 2;
+                ringPos.push(r * Math.cos(t), (Math.random()-0.5)*0.15, r * Math.sin(t));
+            }
+            ringGeo.setAttribute('position', new THREE.Float32BufferAttribute(ringPos, 3));
+            ring = new THREE.Points(ringGeo, new THREE.PointsMaterial({ size: 0.015, color: 0xcc99ff, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending }));
+            ring.rotation.x = Math.PI / 6; 
+            ring.rotation.z = Math.PI / 10;
+            scene.add(ring);
+
+            // 3. Sao nền (Có thể nhấp nháy)
+            const starGeo = new THREE.BufferGeometry();
+            const starPos = [];
+            const starSizes = []; // Mảng chứa kích thước riêng cho từng sao để nhấp nháy
+            for (let i = 0; i < 3000; i++) {
+                starPos.push(THREE.MathUtils.randFloatSpread(100), THREE.MathUtils.randFloatSpread(100), THREE.MathUtils.randFloatSpread(100));
+                starSizes.push(Math.random()); // Giá trị ngẫu nhiên ban đầu
+            }
+            starGeo.setAttribute('position', new THREE.Float32BufferAttribute(starPos, 3));
+            starGeo.setAttribute('sizeData', new THREE.Float32BufferAttribute(starSizes, 1)); // Lưu dữ liệu size
+            stars = new THREE.Points(starGeo, new THREE.PointsMaterial({ size: 0.1, color: 0xffffff, transparent: true, opacity: 0.6 }));
+            scene.add(stars);
+
+            // Sự kiện đổi màu
+            document.getElementById('planetColor').addEventListener('input', (e) => planet.material.color.set(e.target.value));
+            document.getElementById('ringColor').addEventListener('input', (e) => ring.material.color.set(e.target.value));
+
+            window.addEventListener('resize', onWindowResize, false);
+            animate();
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // --- VÒNG LẶP ANIMATION (TRÁI TIM CỦA CHƯƠNG TRÌNH) ---
+        function animate() {
+            requestAnimationFrame(animate);
+            const time = Date.now() * 0.001;
+
+            // 1. TÍNH TOÁN ĐỘ MƯỢT (LERP)
+            // Lấy giá trị từ thanh trượt UI (1 đến 20) -> chuyển thành hệ số Lerp (0.005 đến 0.1)
+            // Giá trị càng nhỏ càng mượt và trễ
+            const smoothnessVal = parseInt(UI.smoothness.value);
+            const lerpFactor = smoothnessVal * 0.005; 
+
+            // Nội suy Scale (Kích thước)
+            currentScale += (targetScale - currentScale) * lerpFactor;
+            
+            // Nội suy Rotation (Góc xoay theo tay)
+            currentRotX += (targetRotX - currentRotX) * lerpFactor;
+            currentRotY += (targetRotY - currentRotY) * lerpFactor;
+
+            // 2. ÁP DỤNG BIẾN ĐỔI
+            planet.scale.setScalar(currentScale);
+            ring.scale.setScalar(currentScale);
+
+            // Xoay tự động (từ UI) + Xoay theo tay
+            const pSpeed = parseInt(UI.planetSpeed.value) * 0.0001;
+            const rSpeed = parseInt(UI.ringSpeed.value) * 0.0001;
+
+            planet.rotation.y += pSpeed; 
+            planet.rotation.x = currentRotX * 0.5; // Xoay nhẹ theo tay trục X
+            planet.rotation.z = -currentRotY * 0.5; // Nghiêng nhẹ theo tay trục Z
+
+            // Vành đai xoay độc lập cho đẹp
+            ring.rotation.y -= rSpeed; 
+            // Vành đai nghiêng theo tay một chút để tạo cảm giác 3D
+            ring.rotation.x = (Math.PI / 6) + currentRotX * 0.3; 
+            ring.rotation.z = (Math.PI / 10) + currentRotY * 0.3;
+
+            // 3. HIỆU ỨNG SAO NHẤP NHÁY
+            // Dùng hàm Sin để thay đổi độ trong suốt (opacity) theo thời gian
+            const twinkleSpeed = parseInt(UI.starTwinkle.value) * 0.05;
+            // Nhấp nháy toàn bộ nền sao (đơn giản & hiệu quả)
+            if(stars.material) {
+                // Opacity dao động từ 0.3 đến 0.8
+                stars.material.opacity = 0.3 + (Math.sin(time * twinkleSpeed) + 1) * 0.25;
+            }
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // --- 4. KHỞI ĐỘNG HỆ THỐNG ---
+        async function setupMediaPipe() {
+            // Thiết lập kích thước canvas debug trùng với video
+            canvasElement.width = 640; 
+            canvasElement.height = 480;
+
+            hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}`});
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
+            hands.onResults(onResults);
+
+            const cameraUtils = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({image: videoElement});
+                },
+                width: 640,
+                height: 480
+            });
+            await cameraUtils.start();
+        }
+
+        initThreeJS();
+        setupMediaPipe();
+    </script>
+</body>
+</html>
